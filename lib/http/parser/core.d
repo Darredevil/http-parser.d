@@ -101,6 +101,7 @@ public alias void delegate(HttpParser, string data) HttpParserStringDelegate;
 public alias void delegate(HttpParser, HttpHeader header) HttpParserHeaderDelegate;
 
 public class HttpParser {
+final:
 private:
     extern(C) {
       mixin(http_parser_cb!("on_message_begin"));
@@ -241,21 +242,20 @@ public:
     @property ulong contentLength() {
         return http_parser_get_content_length(_parser);
     }
-    @property HttpBodyTransmissionMode transmissionMode() {
-        return _transmissionMode;
-    }
-
     /*
        Available on statusComplete
      */
     @property uint statusCode() {
         return _statusCode;
     }
-  }
 
-  package {
+    void _resetCurrentHeader() {
+      _currentHeader = HttpHeader.init;
+    }
+  
+package:
     int _on_message_begin() {
-      _resetCounters();
+      _resetCurrentHeader();
       if(this._messageBegin) {
         try {
           _messageBegin(this);
@@ -307,22 +307,20 @@ public:
       return CB_OK;
     }
 
-    int _on_header_field(ubyte[] data) {
-      if(_currentHeader.hasValue) {
-        int res = _safePublishHeader();
-        _resetCurrentHeader();
-        if(res != CB_OK) {
-          return res;
-        }
+    int _on_header_field(ubyte[] data) {      
+      int res = _safePublishHeader();
+      _resetCurrentHeader();
+      if(res != CB_OK) {
+        return res;
       }
       string text = cast(string)data;
-      _currentHeader._name = text.idup;
+      _currentHeader.name = text.idup;
       return CB_OK;
     }
 
     int _on_header_value(ubyte[] data) {
       string text = cast(string)data;
-      _currentHeader._value = text.idup;
+      _currentHeader.value = text.idup;
       return CB_OK;
     }
 
@@ -367,7 +365,6 @@ public:
       }
       return CB_OK;
     }
-  }
 
   ~this() {
     if(_parser) {
