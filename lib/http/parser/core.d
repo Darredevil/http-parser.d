@@ -33,26 +33,14 @@ enum HttpParserType {
   BOTH
 };
 
-enum HttpBodyTransmissionMode {
-    None,
-    ContentLength,
-    Chunked
-};
-
-@property bool shouldRead(HttpBodyTransmissionMode mode) pure nothrow {
-    return mode > HttpBodyTransmissionMode.None;
-}
-
 public struct HttpVersion {
     private:
         ushort _minor;
         ushort _major;
-        string _str;
     public:
         this(ushort major, ushort minor) {
             _major = major;
             _minor = minor;
-            _str = std.string.format("%d.%d", _major, _minor);
         }
 
         @property {
@@ -64,50 +52,21 @@ public struct HttpVersion {
             }
         }
 
-        string toString() {
-            return _str;
+        void toString(Output)(Output s) 
+        if (isOutputRange!Output) {
+            formattedWrite(s, "%d.%d", _major, _minor);
         }
 }
+
 public struct HttpHeader {
-  package string _name, _value;
-
-  public:
-    @property string name() {
-      return _name;
-    }
-    @property void name(string name) {
-      _name = name;
-    }
-    @property string value() {
-      return _value;
-    }
-    @property void value(string value) {
-      _value = value;
-    }
-
-    @property bool hasValue() {
-      return _value !is null;
-    }
-
-    @property bool hasName() {
-      return _name !is null;
-    }
-
-    @property bool isEmpty() {
-      return !hasName() && !hasValue();
-    }
+  string name, value;
 }
 
 public class HttpParserException : Exception {
   private string _name;
+
   public this(string message, string name, string filename = __FILE__, size_t line = __LINE__, Throwable next = null) {
     super(message, filename, line, next);
-  }
-  public @property string name() {
-    return _name;
-  }
-  public @property void name(string name) {
-    _name = name;
   }
 }
 
@@ -142,8 +101,7 @@ public alias void delegate(HttpParser, string data) HttpParserStringDelegate;
 public alias void delegate(HttpParser, HttpHeader header) HttpParserHeaderDelegate;
 
 public class HttpParser {
-  private {
-
+private:
     extern(C) {
       mixin(http_parser_cb!("on_message_begin"));
       mixin(http_parser_data_cb!("on_url"));
@@ -165,35 +123,17 @@ public class HttpParser {
     HttpParserStringDelegate _onUrl, _statusComplete;
     HttpParserHeaderDelegate _onHeader;
     Throwable _lastException;
-    HttpBodyTransmissionMode _transmissionMode;
-    bool _transferEncodingPresent = false;
 
-    __gshared const int CB_OK = 0;
-    __gshared const int CB_ERR = 1;
+    enum CB_OK = 0, CB_ERR = 1;
 
-    /** Begin Counters
-      Countes are reset every time a new message is received. Check _resetCounters.
-      */
-    int _headerFields;
-    int _headerValues;
     uint _statusCode;
     HttpHeader _currentHeader;
 
     void _resetCounters() {
-      _transferEncodingPresent = false;
-      _headerFields = 0;
-      _headerValues = 0;
-      _resetCurrentHeader();
+      _currentHeader = HttpHeader.init;
     }
 
-    void _resetCurrentHeader() {
-      destroy(_currentHeader);
-    }
-    /** End Counters **/
-  }
-
-
-  public {
+public:
 
     this() {
       this(HttpParserType.REQUEST);
@@ -376,13 +316,13 @@ public class HttpParser {
         }
       }
       string text = cast(string)data;
-      _currentHeader._name ~= text;
+      _currentHeader._name = text.idup;
       return CB_OK;
     }
 
     int _on_header_value(ubyte[] data) {
       string text = cast(string)data;
-      _currentHeader._value ~= text;
+      _currentHeader._value = text.idup;
       return CB_OK;
     }
 
@@ -396,35 +336,14 @@ public class HttpParser {
       return CB_OK;
     }
     void _publishHeader() {
-      if(_currentHeader.isEmpty) return;
-      if(_currentHeader.name.indexOf("Transfer-Encoding", CaseSensitive.no) != -1) {
-        _transferEncodingPresent = true;
-      }
       if(this._onHeader) {
         this._onHeader(this, _currentHeader);
       }
     }
 
-    void _determinateTransmissionMode() {
-        // Follow the order in the RFC http://www.w3.org/Protocols/rfc2616/rfc2616-sec4.html#sec4.4
-
-        // use transfer encoding if present
-        if(_transferEncodingPresent) {
-            _transmissionMode = HttpBodyTransmissionMode.Chunked;
-        }
-        // otherwise check if there is contentLength (ContentLength: 0 must be interpreted as non-existent)
-        else if(this.contentLength > 0) {
-            _transmissionMode = HttpBodyTransmissionMode.ContentLength;
-        } else {
-            // No HTTP Entity Body
-            _transmissionMode = HttpBodyTransmissionMode.None;
-        }
-    }
-
     int _on_headers_complete() {
       try {
         _publishHeader();
-        _determinateTransmissionMode();
         if(this._headersComplete) {
           _headersComplete(this);
         }
@@ -440,7 +359,7 @@ public class HttpParser {
         try {
             bool isFinal = http_body_is_final(_parser) != 0;
             auto chunk = HttpBodyChunk(data, isFinal);
-          _onBody(this, chunk);
+            _onBody(this, chunk);
         } catch(Throwable ex) {
           _lastException = ex;
           return CB_ERR;
